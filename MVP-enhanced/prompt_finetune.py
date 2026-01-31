@@ -91,41 +91,21 @@ def finetune(config):
     model.bert_fuse.requires_grad_(True)
     model.bert_fuse.cuda()
 
-
-
-
     model.node_embedding.requires_grad_(True)
     model.gps_mlm_head.requires_grad_(True)
     model.route_mlm_head.requires_grad_(True)
 
     model.seg_embedding_learning.bert.embeddings.word_embeddings.requires_grad_(True)
     model.seg_embedding_learning.cls.requires_grad_(True)
-    # i=1
-    # for name, module in model.named_modules():
-    #     print("name",name)
-    #     print("module",module)
-    #     for param in module.parameters():
-    #         param.requires_grad = False
-    #     if name == 'node_embedding' or name =='gps_mlm_head' or name=='route_mlm_head':
-    #         print(i)
-    #         for param in module.parameters():
-    #             param.requires_grad = True
-    #     i+=1
-
-
-
-
-
-
 
     model.train()
 
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     nowtime = datetime.now().strftime("%y%m%d%H%M%S")
-    model_name = 'JTMR_{}_{}_{}_{}_{}'.format(city, version, num_epochs, num_samples, nowtime)
-    model_path = os.path.join(save_path, 'JTMR_{}_{}'.format(city, nowtime), 'model')
-    log_path = os.path.join(save_path, 'JTMR_{}_{}'.format(city, nowtime), 'log')
+    model_name = 'MVP_{}_{}_{}_{}_{}'.format(city, version, num_epochs, num_samples, nowtime)
+    model_path = os.path.join(save_path, 'MVP_{}_{}'.format(city, nowtime), 'model')
+    log_path = os.path.join(save_path, 'MVP_{}_{}'.format(city, nowtime), 'log')
 
     if not os.path.exists(model_path):
         os.makedirs(model_path)
@@ -202,8 +182,6 @@ def finetune(config):
             masked_route_mlm_pred = route_mlm_pred[masked_pos]
             route_mlm_loss = nn.CrossEntropyLoss()(masked_route_mlm_pred, y_label)
 
-            # loss = (route_mlm_loss + gps_mlm_loss + 0.2*traj_cl_loss + 0.1*road_cl_loss)/4
-            # loss = (route_mlm_loss + gps_mlm_loss + 0.2*traj_cl_loss) / 3
             loss = (route_mlm_loss + gps_mlm_loss + loss1 + 3*match_loss) / 4
 
             step = epoch_step*epoch + idx
@@ -236,6 +214,3 @@ if __name__ == '__main__':
 
     config = json.load(open('config/prompt_finetune_{}.json'.format(city), 'r'))
     finetune(config)
-
-# road classification     | micro F1: 0.7248, macro F1: 0.6954
-# travel speed estimation | MAE: 2.4809, RMSE: 3.4118

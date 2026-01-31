@@ -9,10 +9,10 @@ import torch.nn.utils.rnn as rnn_utils
 
 
 
-class JGRMModel(BaseModel):
+class MVPModel(BaseModel):
     def __init__(self, prompt_ST,vocab_size, route_max_len, road_feat_num, road_embed_size, gps_feat_num, gps_embed_size, route_embed_size, hidden_size, edge_index, drop_edge_rate, drop_route_rate, drop_road_rate,  bert_hiden_size, pad_token_id,
                  bert_attention_heads, bert_hidden_layers,bert_vocab_size,mode='p'):
-        super(JGRMModel, self).__init__()
+        super(MVPModel, self).__init__()
 
         self.prompt_ST = prompt_ST
         self.vocab_size = vocab_size # 路段数量
@@ -26,46 +26,30 @@ class JGRMModel(BaseModel):
         self.node_embedding.requires_grad_(True)
 
         # time embedding 考虑加法, 保证 embedding size一致
-        # self.minute_embedding = nn.Embedding(1440 + 1, route_embed_size)    # 0 是mask位
-        # self.week_embedding = nn.Embedding(7 + 1, route_embed_size)         # 0 是mask位
-        # self.delta_embedding = IntervalEmbedding(100, route_embed_size)     # -1 是mask位
         self.minute_embedding = nn.Embedding(1440 + 1, hidden_size)  # 0 是mask位
         self.week_embedding = nn.Embedding(7 + 1, hidden_size)  # 0 是mask位
         self.delta_embedding = IntervalEmbedding(100, hidden_size)
 
         # route encoding
         self.graph_encoder = GraphEncoder(road_embed_size, route_embed_size)
-        # self.position_embedding1 = nn.Embedding(route_max_len, route_embed_size)
         self.position_embedding1 = nn.Embedding(route_max_len, hidden_size)
-        # self.fc1 = nn.Linear(route_embed_size, hidden_size) # route fuse time ffn
         self.fc1 = nn.Linear(hidden_size, hidden_size)  # route fuse time ffn
         self.route_encoder = TransformerModel(hidden_size, 8, hidden_size, 2, drop_route_rate)
 
         # gps encoding
         self.gps_linear = nn.Linear(gps_feat_num, gps_embed_size)
-        # self.gps_linear = nn.Linear(gps_feat_num, hidden_size)
         encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_size, nhead=4, dropout=0.1,dim_feedforward=hidden_size,batch_first = True)
 
         self.gps_inter_transformer_encoder = nn.TransformerEncoder(encoder_layer=encoder_layer, num_layers=1)
         self.gps_memory = memory.Memory(512, gps_embed_size)
         self.gps_fc=nn.Linear(gps_embed_size, hidden_size)
-        # self.gps_fc_gru=nn.Linear(gps_embed_size, gps_embed_size)
 
 
         self.gps_intra_encoder = nn.GRU(gps_embed_size, gps_embed_size, bidirectional=True, batch_first=True) # 路段内建模
-        # self.gps_inter_encoder = nn.GRU(gps_embed_size, gps_embed_size, bidirectional=True, batch_first=True) # 路段间建模
 
         # cl project head
         self.gps_proj_head = nn.Linear(2*gps_embed_size, hidden_size)
         self.route_proj_head = nn.Linear(hidden_size, hidden_size)
-
-        # self.gps_joint_proj_head = nn.Linear(2*gps_embed_size, hidden_size)
-        # self.route_joint_proj_head = nn.Linear(hidden_size, hidden_size)
-
-
-
-        # self.clip_gps_proj_head = nn.Linear(2*gps_embed_size, hidden_size)
-        # self.clip_route_proj_head = nn.Linear(hidden_size, hidden_size)
 
         self.predictor = nn.Sequential(nn.Linear(hidden_size, 2*hidden_size, bias=False),
                                        nn.BatchNorm1d(2*hidden_size),
@@ -86,7 +70,6 @@ class JGRMModel(BaseModel):
 
         # matching
         self.matching_predictor = nn.Linear(hidden_size*2, 2)
-        # self.matching_predictor_pre = nn.Linear(hidden_size * 2, 2)
         self.register_buffer("gps_queue", torch.randn(hidden_size, 2048))
         self.register_buffer("route_queue", torch.randn(hidden_size, 2048))
 
@@ -116,8 +99,6 @@ class JGRMModel(BaseModel):
 
     def seg_embedding(self, x):
         # todo 只有route_prompt
-        # bert_output = self.seg_embedding_learning(input_ids=x[0], attention_mask=x[1], labels=x[2],
-        #                                           output_hidden_states=True)
         if self.prompt_ST == 1:
             bert_output = self.seg_embedding_learning(inputs_embeds=x[0], attention_mask=x[1], labels=x[2],
                                                       output_hidden_states=True, output_attentions=False)
@@ -135,14 +116,8 @@ class JGRMModel(BaseModel):
 
     def encode_route(self, route_data, route_assign_mat, masked_route_assign_mat):
         # 返回路段表示和轨迹的表示
-        # print("route_assign_mat",route_assign_mat)
-        # print("route_assign_mat形状",route_assign_mat.shape)
-        # print("masked_route_assign_mat", masked_route_assign_mat)
-        # print("masked_route_assign_mat形状", masked_route_assign_mat.shape)
-
         # 先对原始序列进行mask，然后再进行序列建模，防止信息泄露
         batch_size, max_seq_len = masked_route_assign_mat.size()
-        # print("max_seq_len",max_seq_len)
 
         src_key_padding_mask = (route_assign_mat == self.vocab_size)
         pool_mask = (1 - src_key_padding_mask.int()).unsqueeze(-1) # 0 为padding位
@@ -153,20 +128,13 @@ class JGRMModel(BaseModel):
 
         # 使用布尔索引来设置label_tensor中符合条件的值
         # 找出masked_route_assign_mat中值为6450的位置
-        # print("mask_token是什么",mask_token)
         mask_6450 = masked_route_assign_mat == self.vocab_size
-        # print("mask_6450", mask_6450)
-        # print("mask_6450 shape:", mask_6450.shape)
         condition = (mask_6450) & (route_assign_mat != self.vocab_size)
 
         # 将这些位置的值从 route_assign_mat 复制到 modified_route_assign_mat
         label_tensor[condition] = route_assign_mat[condition]
         encoder_mask = (route_assign_mat != self.vocab_size).int()
-        # print("label_tensor",label_tensor[0])
-        # print("label_tensor", label_tensor[1])
-        # print("encoder_mask",encoder_mask)
         if self.prompt_ST == 1:
-            # bert_prompt = self.bert_prompt(route_assign_mat, route_data,src_key_padding_mask)
             bert_prompt = self.bert_prompt(route_assign_mat, None,src_key_padding_mask)
             bert_emb = self.bert_fuse(self.seg_embedding_learning.bert.embeddings.word_embeddings(route_assign_mat.to(torch.long)) + bert_prompt)
             loss_1 = self.seg_embedding(
@@ -174,8 +142,6 @@ class JGRMModel(BaseModel):
         else:
             loss_1 = self.seg_embedding(
                 [masked_route_assign_mat.to(torch.long) , encoder_mask.to(torch.long) , label_tensor.to(torch.long) ])
-        # loss_1 = self.seg_embedding(
-        #     [masked_route_assign_mat.to(torch.long) , encoder_mask.to(torch.long) , label_tensor.to(torch.long) ])
 
         if self.mode == 'p':
             lookup_table = torch.cat([self.node_embedding.weight, self.route_padding_vec], 0)
@@ -188,10 +154,8 @@ class JGRMModel(BaseModel):
         route_emb = torch.index_select(
             lookup_table, 0, masked_route_assign_mat.int().view(-1)).view(batch_size, max_seq_len, -1)
         if self.prompt_ST == 1:
-            # print("prompt生成准备")
-            #todo 去掉时间的prompt看看效果
+            # todo 去掉时间的prompt看看效果
             prompt=self.route_prompt(route_assign_mat,route_data,src_key_padding_mask)
-            # prompt = self.route_prompt(route_assign_mat, None, src_key_padding_mask)
             route_emb=self.route_fuse(route_emb+prompt)
 
 
@@ -212,13 +176,6 @@ class JGRMModel(BaseModel):
             min_emb = self.minute_embedding(min_data)
             delta_emb = self.delta_embedding(delta_data)
 
-        # datetimerep = torch.cat([week_emb, min_emb, delta_emb], dim=-1)
-        # timene_input = torch.cat(
-        #     [self.seg_embedding_learning.bert.embeddings.word_embeddings(route_assign_mat.to(torch.long)), datetimerep], dim=-1)
-        # timene = self.timene(timene_input) + timene_input
-        # representation = self.represent(timene)
-        # semantic, _ = self.GRU(representation)
-
 
 
         # position embedding
@@ -227,31 +184,18 @@ class JGRMModel(BaseModel):
         pos_emb = self.position_embedding1(pos_emb)
 
         # fuse info
-        # print("route_emb之前的形状",route_emb.shape)
-        # print("semantic之前的形状",self.seg_embedding_learning.bert.embeddings.word_embeddings(route_assign_mat.to(torch.long)).shape)
-
         if self.prompt_ST == 1:
             route_emb = torch.concat([route_emb, bert_emb], dim=-1)
         else:
             route_emb=torch.concat([route_emb,self.seg_embedding_learning.bert.embeddings.word_embeddings(route_assign_mat.to(torch.long))],dim=-1)
-        # route_emb=torch.concat([route_emb,self.seg_embedding_learning.bert.embeddings.word_embeddings(route_assign_mat.to(torch.long))],dim=-1)
         route_emb = route_emb + pos_emb + week_emb + min_emb + delta_emb
         route_emb = self.fc1(route_emb)+route_emb
         route_enc = self.route_encoder(route_emb, None, src_key_padding_mask) # mask 被在这里处理，mask不参与计算attention
         route_enc = torch.where(torch.isnan(route_enc), torch.full_like(route_enc, 0), route_enc) # 将nan变为0,防止溢出
-        # route_enc=torch.cat([route_enc,semantic], dim=-1)
-        # route_enc=self.fc3(route_enc)
-
-        # print("route_enc的形状",route_enc.shape)
-        # print("semantic的形状",semantic.shape)
 
         route_unpooled = route_enc * pool_mask.repeat(1, 1, route_enc.shape[-1]) # (batch_size,max_len,feat_num)
-        # print("pool_mask", pool_mask)
-        # print(pool_mask.shape)
-        # print("route_unpooled",route_unpooled)
         # 对于单路段mask，可能存在整个route都被mask掉的情况，此时pool_mask.sum(1)中有0值，令其最小值为1防止0除
         route_pooled = route_unpooled.sum(1) / pool_mask.sum(1).clamp(min=1) # (batch_size, feat_num)
-        # print("route_unpooled形状",route_unpooled.shape)
         return route_unpooled, route_pooled, loss_1
 
     def encode_gps(self, gps_data, masked_gps_assign_mat, masked_route_assign_mat, gps_length,route_assign_mat):
@@ -260,31 +204,16 @@ class JGRMModel(BaseModel):
 
         # mask features
         gps_src_key_padding_mask = (masked_gps_assign_mat == self.vocab_size)
-        # print("gps_src_key_padding_mask", gps_src_key_padding_mask[-2])
-        # print("gps_src_key_padding_mask形状", gps_src_key_padding_mask.shape)
         gps_mask_mat = (1 - gps_src_key_padding_mask.int()).unsqueeze(-1).repeat(1, 1, gps_data.shape[-1]) # 0 为padding位
-        # print("gps_mask_mat", gps_mask_mat)
-        # print("gps_mask_mat形状",gps_mask_mat.shape)
         masked_gps_data = gps_data * gps_mask_mat # (batch_size,gps_max_len,feat_num)
 
         # flatten gps data 便于进行路段内gru的并行
         flattened_gps_data, route_length, flattend_mask = self.gps_flatten(masked_gps_data, gps_length) # flattened_gps_data (road_num, max_pt_len ,gps_fea_size)
-        # print("route_length",route_length)
-        # print("flattened_mask",flattend_mask)
-        # print("flattened_gps_data的形状", flattened_gps_data.shape)
         _, gps_emb = self.gps_intra_encoder(flattened_gps_data) # gps_emb (1, road_num, gps_embed_size) # 不输入hidden默认输入全0为序列的hidden state
-        # gps_emb=self.gps_intra_transformer_encoder(flattened_gps_data,src_key_padding_mask=flattend_mask)
         gps_emb = gps_emb[-1] # 只保留前向的表示
-        # memory_pool_mask = (1 - flattend_mask.int())
-        # print("memory_pool_mask",memory_pool_mask)
-        # print("形状是",memory_pool_mask.shape)
-        # print("他这个gps_emb的形状", gps_emb.shape)
-        # memory_pooled = gps_emb.sum(1) / memory_pool_mask.sum(1).clamp(min=1).unsqueeze(1)
-        # gps_memory_output = self.gps_memory(memory_pooled)
         gps_memory_output = self.gps_memory(gps_emb)
         gps_memory_output=gps_memory_output+gps_emb
         gps_memory_output=self.gps_fc(gps_memory_output)
-        # gps_memory_output = self.gps_fc_gru(gps_memory_output)
         stacked_gps_emb = self.route_stack(gps_memory_output, route_length)
 
         new_route_assign=route_assign_mat[:,:max(route_length.values())]
@@ -303,38 +232,16 @@ class JGRMModel(BaseModel):
             print(masked_gps_assign_mat[max_key])
         gps_emb=self.gps_inter_transformer_encoder(stacked_gps_emb,src_key_padding_mask=transformer_padding_mask)
 
-
-
-        # print("他这个gps_emb的形状",gps_emb.shape)
-        #
-
-        # print(gps_emb.shape)
-
-        # gps_emb = torch.cat([gps_emb[0].squeeze(0), gps_emb[1].squeeze(0)],dim=-1) # 前后向表示拼接
-
-        # stack gps emb 便于进行路段间gru的计算
-        # stacked_gps_emb = self.route_stack(gps_emb, route_length) # stacked_gps_emb (batch_size, max_route_len, gps_embed_size)
-
-        # gps_emb, _ = self.gps_inter_encoder(stacked_gps_emb)  # (batch_size, max_route_len, 2*gps_embed_size) # 不输入hidden默认输入全0为序列的hidden state
-        # print("最后形状",gps_emb.shape)
-
         route_src_key_padding_mask = (masked_route_assign_mat == self.vocab_size).transpose(0, 1)
-        # print("route_src_key_padding_mask",route_src_key_padding_mask)
-        # print("route_src_key_padding_mask形状",route_src_key_padding_mask.shape)
         route_pool_mask = (1 - route_src_key_padding_mask.int()).transpose(0, 1).unsqueeze(-1) # 包含mask的长度
-        # print("route_pool_mask",route_pool_mask)
-        # print("route_pool_mask形状", route_pool_mask.shape)
         # 对于单路段mask，可能存在整个route都被mask掉的情况，此时pool_mask.sum(1)中有0值，令其最小值为1防止0除
         gps_pooled = gps_emb.sum(1) / route_pool_mask.sum(1).clamp(min=1) # mask 后的有值的路段数量，比路段长度要短
-        # print(gps_pooled.shape)
         gps_unpooled = gps_emb
-        # print("gps_unpooled形状",gps_unpooled.shape)
         return gps_unpooled, gps_pooled
 
     def route_stack(self, gps_emb, route_length):
         # flatten_gps_data tensor = (real_len, max_gps_in_route_len, emb_size)
         # route_length dict = { key:tid, value: road_len }
-        # print("gps_emb形状",gps_emb.shape)
         values = list(route_length.values())
         route_max_len = max(values)
         data_list = []
@@ -345,7 +252,6 @@ class JGRMModel(BaseModel):
             data_list.append(data)
 
         stacked_gps_emb = rnn_utils.pad_sequence(data_list, padding_value=0, batch_first=True)
-        # print("stacked_gps_emb形状", stacked_gps_emb.shape)
 
         return stacked_gps_emb
 
@@ -353,7 +259,6 @@ class JGRMModel(BaseModel):
         # 把gps_data按照gps_assign_mat做形变，把每个路段上的gps点单独拿出来，拼成一个新的tensor (road_num, gps_max_len, gps_feat_num)，
         # 该tensor用于输入GRU进行并行计算
         traj_num, gps_max_len, gps_feat_num = gps_data.shape
-        # print("gps_data形状",gps_data.shape)
         flattened_gps_list = []
         route_index = {}
         flattened_gps_length_list=[]
@@ -372,18 +277,11 @@ class JGRMModel(BaseModel):
                     flattened_gps_length_list.append(length)
 
 
-        # print("flattened_gps_list",flattened_gps_list)
         flattened_gps_data = rnn_utils.pad_sequence(flattened_gps_list, padding_value=0, batch_first=True) # (road_num, gps_max_len, gps_feat_num)
         mask = torch.zeros(flattened_gps_data.shape[0], flattened_gps_data.shape[1], dtype=torch.bool).cuda()
 
         for i, length in enumerate(flattened_gps_length_list):
             mask[i, length:] = True
-        # print("flatten这的mask形状",flatten_padding_mask)
-        # print("route_index",route_index)
-        # print(gps_length[0])
-
-        # print(sum(list(route_index.values())))
-        # print(flattened_gps_data.shape)
 
         return flattened_gps_data, route_index,mask
 
@@ -393,9 +291,6 @@ class JGRMModel(BaseModel):
         data_list = []
         mask_list = []
         route_length = [length[length!=self.vocab_size].shape[0] for length in route_assign_mat]
-        # print("route_assign_mat",route_assign_mat)
-        # print(route_assign_mat.shape)
-        # print("route_length",route_length)
 
         modal_emb0 = self.modal_embedding(torch.tensor(0).cuda())
         modal_emb1 = self.modal_embedding(torch.tensor(1).cuda())
@@ -428,9 +323,6 @@ class JGRMModel(BaseModel):
             gps_emb = self.fc2(gps_emb)
 
             data = torch.cat([gps_emb, route_emb], dim=0)
-            # print(gps_emb.shape)
-            # print(route_emb.shape)
-            # print("data的形状", data.shape)
 
             data_list.append(data)
 
@@ -483,10 +375,6 @@ class TransformerModel(nn.Module):  # vanilla transformer
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
 
     def forward(self, src, src_mask, src_key_padding_mask):
-        # print("src",src)
-        # print("src_key_padding_mask",src_key_padding_mask)
-        # print("src形状",src.shape)
-        # print("src_key_padding_mask形状",src_key_padding_mask.shape)
         output = self.transformer_encoder(src, src_mask, src_key_padding_mask)
         return output
 
