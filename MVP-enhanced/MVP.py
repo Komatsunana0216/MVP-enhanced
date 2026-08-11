@@ -34,7 +34,7 @@ class MVPModel(BaseModel):
         self.graph_encoder = GraphEncoder(road_embed_size, route_embed_size)
         self.position_embedding1 = nn.Embedding(route_max_len, hidden_size)
         self.fc1 = nn.Linear(hidden_size, hidden_size)  # route fuse time ffn
-        self.route_encoder = TransformerModel(hidden_size, 8, hidden_size, 2, drop_route_rate)
+        self.route_encoder = TransformerModel(hidden_size, 8, hidden_size, 4, drop_route_rate)
 
         # gps encoding
         self.gps_linear = nn.Linear(gps_feat_num, gps_embed_size)

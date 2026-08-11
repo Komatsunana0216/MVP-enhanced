@@ -334,12 +334,12 @@ def random_mask(gps_assign_mat, route_assign_mat, gps_length, mask_token, mask_l
     # 截断
     if route_mask_pos.shape[1] > route_assign_mat.shape[1]:
         route_mask_pos = route_mask_pos[:, :route_assign_mat.shape[1]]
-    #todo 这里改了开头和结尾不mask
+    # O/D 不 mask：起点取第 0 位；终点取真实路段末位（非 padding 末位）
     for i in range(batch_size):
-        # 将每行开头的位置设为False
-        route_mask_pos[i][0] = False
-        # 将每行结尾的位置设为False
-        route_mask_pos[i][-1] = False
+        route_mask_pos[i, 0] = False
+        valid = (route_assign_mat[i] != mask_token).nonzero(as_tuple=False).view(-1)
+        if valid.numel() > 0:
+            route_mask_pos[i, int(valid[-1].item())] = False
 
     # print("截断后route_mask_pos", route_mask_pos[0])
     # print(route_mask_pos.shape)
